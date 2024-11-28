@@ -44,7 +44,7 @@ def print_columns(df):
             print("")
 
 
-def df_to_bigquery(df: pl.DataFrame, project_id: str, dataset_id: str, table_id: str):
+def df_to_bigquery(df: pl.DataFrame, project_id: str, dataset_id: str, table_id: str, clustered_by: list[str] | None = None):
     client = bigquery.Client()
     table_ref = f"{project_id}.{dataset_id}.{table_id}"
 
@@ -66,12 +66,26 @@ def df_to_bigquery(df: pl.DataFrame, project_id: str, dataset_id: str, table_id:
             bq_type = "FLOAT"
         elif dtype == "Boolean":
             bq_type = "BOOLEAN"
+        elif dtype == "Date":
+            bq_type = "DATE"
+        elif dtype == "Time":
+            bq_type = "TIME"
         else:
             bq_type = "STRING"
-        schema.append(bigquery.SchemaField(name, bq_type))
 
-    # Create table
+        # Check if column has null values
+        is_nullable = df[name].null_count() > 0
+
+        # Make id columns non-nullable primary keys
+        schema.append(bigquery.SchemaField(name, bq_type, mode='NULLABLE' if is_nullable else 'REQUIRED'))
+
+    # Create table with clustering on specified columns
     table = bigquery.Table(table_ref, schema=schema)
+    if clustered_by is not None:
+        table.clustering_fields = clustered_by
+    elif "id" in df.columns:
+        table.clustering_fields = ["id"]
+
     table = client.create_table(table)
 
     # Convert to pandas and upload (BigQuery client doesn't support Polars directly)
@@ -112,26 +126,45 @@ def my_cloudevent_function(
             f.write(response.read())
         response = open(cache_filename, "rb")
 
-    dias_validos = { "Lunes": 0, "Martes": 1, "Miércoles": 2, "Miercoles": 2, \
+    DIAS = { "Lunes": 0, "Martes": 1, "Miércoles": 2, "Miercoles": 2, \
                      "Jueves": 3, "Viernes": 4, "Sabado": 5, "Sábado": 5, "Domingo": 6 }  # fmt: skip
+    SINO = { "SI": True, "NO": False }
+    PRIORIDAD = { "ALTA": 2, "MEDIA": 1, "BAJA": 0 }
+
     df = (
         pl
-        .read_csv(response, infer_schema_length=2 ** (64 - 1))
+        .read_csv(response, infer_schema_length=2 ** (64 - 1), null_values=["NA"])
         .lazy()
-        .filter(pl.col("dia").is_in(dias_validos.keys()))
+        .filter(pl.col("dia").is_in(DIAS.keys()))
         .with_columns(
-            pl.col("dia")
-            .replace(dias_validos)
-            .cast(pl.UInt8)
+            pl.col("prioridad").replace_strict(PRIORIDAD).cast(pl.UInt8),
+            pl.col("dia").replace_strict(DIAS).cast(pl.UInt8),
+            pl.col("fecha_evento").str.strptime(pl.Date, format="%Y-%m-%d", strict=False),
+            pl.col("hora_evento").str.strptime(pl.Time, format="%H:%M:%S", strict=False),
+            pl.col("fecha_captura").str.strptime(pl.Date, format="%Y-%m-%d", strict=False),
+            pl.col("trasladado_lesionados").replace_strict(SINO, default=False, return_dtype=pl.Boolean),
+            pl.col("interseccion_semaforizada").replace_strict(SINO, default=False, return_dtype=pl.Boolean),
+
+
         )
     ).collect()
+
+    for column in df.get_columns():
+        name = column.name
+        ws = ['_de_', '_la_', '_a_']
+        while sum((1 if w in name else 0 for w in ws)) != 0:
+            for w in ws:
+                name = name.replace(w, '_')
+        df = df.rename({column.name: name})
 
     table_names = [
         col.name
         for col in df.get_columns()
-        if col.n_unique() < 50 and col.name != "dia" and col.dtype == pl.Utf8
+        if col.n_unique() < 50 and col.name not in ["dia"] and col.dtype == pl.Utf8
     ] # fmt: skip
-    print(f"Processing {len(table_names)} columns: {table_names}")
+    print(f">> Processing {len(table_names)} columns: {table_names}")
+    print_columns(df[table_names])
+    print("\n")
 
     tables = {}
     for name in table_names:
@@ -143,19 +176,24 @@ def my_cloudevent_function(
             "dia": ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"],  # fmt: skip
         }
     ).with_columns(pl.col("id").cast(pl.UInt8)))
-    tables["events"] = df
-    print_columns(df)
+
+    tables["prioridad"] = (pl.DataFrame(
+        {
+            "id": [0, 1, 2],
+            "prioridad": ["BAJA", "MEDIA", "ALTA"],
+        }
+    ).with_columns(pl.col("id").cast(pl.UInt8)))
+
+    print(">> Result:")
+    print_columns(df[table_names])
+    print("\n")
 
     client = bigquery.Client()
     create_dataset_if_not_exists(client, "traffic_data")
 
     # Upload tables
+    df_to_bigquery(df, client.project, "traffic_data", "events", clustered_by=['fecha_evento', 'alcaldia', 'tipo_evento', 'sector'])
     for name, df in tables.items():
-        ws = ['_de_', '_la_']
-        while sum((1 if w in name else 0 for w in ws)) != 0:
-            for w in ws:
-                name = name.replace(w, '_')
-
         df_to_bigquery(df, client.project, "traffic_data", name)
 
     print("Done!")
