@@ -1,0 +1,24 @@
+[project]
+name = "gcloud"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Alejandro Osornio", email = "aoxo.contact@gmail.com" }
+]
+dependencies = [
+    "functions-framework>=3.8.2",
+    "polars>=1.14.0",
+    "cloudevents>=1.11.0",
+    "ipykernel>=6.29.5",
+    "google>=3.0.0",
+    "google-cloud-bigquery>=3.27.0",
+    "pyarrow>=18.1.0",
+    "pandas>=2.2.3",
+]
+readme = "README.md"
+requires-python = ">= 3.8"
+
+[tool.rye]
+managed = true
+virtual = true
+dev-dependencies = []
