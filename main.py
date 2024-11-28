@@ -112,118 +112,50 @@ def my_cloudevent_function(
             f.write(response.read())
         response = open(cache_filename, "rb")
 
-    df = pl.read_csv(response, infer_schema_length=2 ** (64 - 1))
-    print_columns(df)
-
+    dias_validos = { "Lunes": 0, "Martes": 1, "Miércoles": 2, "Miercoles": 2, \
+                     "Jueves": 3, "Viernes": 4, "Sabado": 5, "Sábado": 5, "Domingo": 6 }  # fmt: skip
     df = (
-        df.lazy()
-        .filter(
-            pl.col("dia").is_in(
-                [
-                    "Lunes",
-                    "Martes",
-                    "Miercoles",
-                    "Miércoles",
-                    "Jueves",
-                    "Viernes",
-                    "Sábado",
-                    "Sabado",
-                    "Domingo",
-                ]
-            )
-        )
+        pl
+        .read_csv(response, infer_schema_length=2 ** (64 - 1))
+        .lazy()
+        .filter(pl.col("dia").is_in(dias_validos.keys()))
         .with_columns(
             pl.col("dia")
-            .replace(
-                {
-                    "Lunes": 0,
-                    "Martes": 1,
-                    "Miércoles": 2,
-                    "Miercoles": 2,
-                    "Jueves": 3,
-                    "Viernes": 4,
-                    "Sabado": 5,
-                    "Sábado": 5,
-                    "Domingo": 6,
-                }
-            )
+            .replace(dias_validos)
             .cast(pl.UInt8)
         )
     ).collect()
 
-    print(df["dia"].unique().to_list())
+    table_names = [
+        col.name
+        for col in df.get_columns()
+        if col.n_unique() < 50 and col.name != "dia" and col.dtype == pl.Utf8
+    ] # fmt: skip
+    print(f"Processing {len(table_names)} columns: {table_names}")
 
+    tables = {}
+    for name in table_names:
+        df, tables[name] = create_table(df, name)
 
-    df, tipo_evento = create_table(df, "tipo_evento")
-    print(tipo_evento)
-
-    df, alcaldia = create_table(df, "alcaldia")
-    print(alcaldia)
-
-    df, tipo_de_interseccion = create_table(df, "tipo_de_interseccion")
-    print(tipo_de_interseccion)
-
-    df, interseccion_semaforizada = create_table(df, "interseccion_semaforizada")
-    print(interseccion_semaforizada)
-
-    df, clasificacion_de_la_vialidad = create_table(df, "clasificacion_de_la_vialidad")
-    print(clasificacion_de_la_vialidad)
-
-    df, sentido_de_circulacion = create_table(df, "sentido_de_circulacion")
-    print(sentido_de_circulacion)
-
-    df, prioridad = create_table(df, "prioridad")
-    print(prioridad)
-
-    df, origen = create_table(df, "origen")
-    print(origen)
-
-    df, trasladado_lesionados = create_table(df, "trasladado_lesionados")
-    print(trasladado_lesionados)
-
-    dia = pl.DataFrame(
+    tables["dia"] = (pl.DataFrame(
         {
             "id": [0, 1, 2, 3, 4, 5, 6],
-            "dia": [
-                "Lunes",
-                "Martes",
-                "Miercoles",
-                "Jueves",
-                "Viernes",
-                "Sabado",
-                "Domingo",
-            ],
+            "dia": ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"],  # fmt: skip
         }
-    ).with_columns(pl.col("id").cast(pl.UInt8))
-    print(dia)
-
+    ).with_columns(pl.col("id").cast(pl.UInt8)))
+    tables["events"] = df
     print_columns(df)
-    print(df)
 
     client = bigquery.Client()
     create_dataset_if_not_exists(client, "traffic_data")
 
-    upload_table = lambda df, name: df_to_bigquery(df, client.project, "traffic_data", name)
+    # Upload tables
+    for name, df in tables.items():
+        ws = ['_de_', '_la_']
+        while sum((1 if w in name else 0 for w in ws)) != 0:
+            for w in ws:
+                name = name.replace(w, '_')
 
-    # Upload main events table
-    upload_table(df, "events")
-
-    # Upload dimension tables
-    upload_table(tipo_evento, "tipo_evento")
-    upload_table(alcaldia, "alcaldia")
-    upload_table(tipo_de_interseccion, "tipo_interseccion")
-    upload_table(
-        interseccion_semaforizada,
-        "interseccion_semaforizada",
-    )
-    upload_table(
-        clasificacion_de_la_vialidad,
-        "clasificacion_vialidad",
-    )
-    upload_table(sentido_de_circulacion, "sentido_circulacion")
-    upload_table(prioridad, "prioridad")
-    upload_table(origen, "origen")
-    upload_table(trasladado_lesionados, "trasladado_lesionados")
-    upload_table(dia, "dia")
+        df_to_bigquery(df, client.project, "traffic_data", name)
 
     print("Done!")
