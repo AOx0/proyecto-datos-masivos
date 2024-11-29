@@ -66,39 +66,201 @@ def query(query: str) -> pl.DataFrame:
     query_job = client.query(query.replace("#", f"{traffic}"), job_config=job_config)
     return pl.DataFrame(pl.from_arrow(query_job.result().to_arrow()))
 
-
 # %%
-# Gráfica de barras de personas fallecidas y lesionadas por año.
+# Number of fallecimientos and lesionados per year
 res = query("""
 SELECT
     EXTRACT(YEAR FROM fecha_evento) as anio,
-    SUM(personas_fallecidas) as personas_fallecidas,
-    SUM(personas_lesionadas) as personas_lesionadas,
- FROM `#.events`
+    SUM(personas_fallecidas) as total_fallecidos,
+    SUM(personas_lesionadas) as total_lesionados
+FROM `#.events`
 GROUP BY anio
+ORDER BY anio
 """)
 
 res_alt = (
     res.with_columns(pl.col("anio").alias("Año"))
-    .with_columns(pl.col("personas_fallecidas").alias("Fallecidas"))
-    .with_columns(pl.col("personas_lesionadas").alias("Lesionadas"))
-    .unpivot(index=["Año"], on=["Fallecidas", "Lesionadas"])
+    .with_columns(pl.col("total_fallecidos").alias("Fallecidos"))
+    .with_columns(pl.col("total_lesionados").alias("Lesionados"))
 )
 
 chart = (
-    alt.Chart(res_alt)
-    .mark_bar()
-    .encode(
-        x=alt.X("Año:O", title="Año"),
-        y=alt.Y("value:Q", title="Número de Muertes", axis=alt.Axis(format="s")),
-        color=alt.Color(
-            "variable:N",
-            scale=alt.Scale(range=[CA_01, CA_07]),
-            legend=alt.Legend(title="Tipo"),
+    (alt.layer(
+        alt.Chart(res_alt)
+        .mark_line(point={"color": "black"}, color=CA_01)
+        .encode(
+            x=alt.X("Año:O", title="Año"),
+            y=alt.Y("Fallecidos:Q", title="Fallecidos", axis=alt.Axis(format="s")),
+            tooltip=["Año", alt.Tooltip("Fallecidos:Q", format=",", title="Fallecidos")]
         ),
-        tooltip=["Año", "variable", alt.Tooltip("value:Q", format=",")],
+        alt.Chart(res_alt)
+        .mark_line(point={"color": "black"}, color=CA_04)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Lesionados:Q", title="Lesionados", axis=alt.Axis(format="s")),
+            tooltip=["Año", alt.Tooltip("Lesionados:Q", format=",", title="Lesionados")]
+        ),
+
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-5, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Fallecidos:Q", axis=None),
+            text=alt.Text("Fallecidos:Q", format=",")
+        ),
+
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-5, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Lesionados:Q", axis=None),
+            text=alt.Text("Lesionados:Q", format=",")
+        )
     )
-    .properties(width=600, height=400, title="Muertes por Año")
+    .resolve_scale(y='independent')
+    .properties(
+        width=600,
+        height=400,
+        title="Fallecidos y Lesionados por Año"
+    ))
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# peoplpe injured per accidents / deaths ratio by year
+res = query("""
+WITH accidents_by_year AS (
+    SELECT
+        EXTRACT(YEAR FROM fecha_evento) as anio,
+        COUNT(*) as total_accidents,
+        SUM(personas_fallecidas) as total_deaths
+    FROM `#.events`
+    GROUP BY anio
+)
+SELECT
+    anio,
+    total_accidents,
+    total_deaths,
+    CAST(total_accidents AS FLOAT64) / NULLIF(total_deaths, 0) as ratio
+FROM accidents_by_year
+ORDER BY anio
+""")
+
+res_alt = res.with_columns(pl.col("anio").alias("Año")).with_columns(
+    pl.col("ratio").alias("Ratio")
+)
+
+chart = (
+    alt.layer(
+        alt.Chart(res_alt)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Año:O", title="Año"),
+            y=alt.Y("Ratio:Q", title="Personas Accidentadas por Muerte", axis=alt.Axis(format=",.0f")),
+            tooltip=[
+                "Año",
+                alt.Tooltip("Ratio:Q", format=",.1f"),
+                alt.Tooltip("total_accidents:Q", title="Total Personas en Accidentes", format=","),
+                alt.Tooltip("total_deaths:Q", title="Total Personas Fallecidas", format=",")
+            ]
+        ),
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-10, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Ratio:Q"),
+            text=alt.Text("total_deaths:Q", format=",")
+        ),
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="top", dy=10, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Ratio:Q"),
+            text=alt.Text("total_accidents:Q", format=",")
+        )
+    )
+    .properties(
+        width=600,
+        height=400,
+        title="Razón de Personas Accidentadas por cada Fallecida"
+    )
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# Ratio of injured people per death by year and tipo
+res = query("""
+WITH accidents_by_year_tipo AS (
+    SELECT
+        EXTRACT(YEAR FROM fecha_evento) as anio,
+        t.tipo_evento as tipo,
+        COUNT(*) as total_accidents,
+        SUM(personas_fallecidas) as total_deaths,
+        SUM(personas_lesionadas) as total_lesionados
+    FROM `#.events` e
+    JOIN `#.tipo_evento` t ON e.tipo_evento = t.id
+    GROUP BY anio, tipo
+)
+SELECT
+    anio,
+    tipo,
+    total_accidents,
+    total_deaths,
+    total_lesionados,
+    CAST(total_lesionados AS FLOAT64) / NULLIF(total_deaths, 0) as ratio
+FROM accidents_by_year_tipo
+ORDER BY anio, tipo
+""")
+
+res_alt = (
+    res.with_columns(pl.col("anio").alias("Año"))
+    .with_columns(pl.col("tipo").alias("Tipo"))
+    .with_columns(pl.col("ratio").alias("Ratio"))
+)
+
+chart = (
+    alt.layer(
+        alt.Chart(res_alt)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Año:O", title="Año"),
+            y=alt.Y("Ratio:Q", title="Personas Lesionadas por Muerte", axis=alt.Axis(format=",.0f")),
+            color=alt.Color("Tipo:N", scale=alt.Scale(range=COLORS), legend=alt.Legend(title="Tipo de Evento")),
+            tooltip=[
+                "Año",
+                "Tipo",
+                alt.Tooltip("Ratio:Q", format=",.1f"),
+                alt.Tooltip("total_accidents:Q", title="Total Accidentes", format=","),
+                alt.Tooltip("total_deaths:Q", title="Total Fallecidos", format=","),
+                alt.Tooltip("total_lesionados:Q", title="Total Lesionados", format=",")
+            ]
+        ),
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-10, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Ratio:Q"),
+            text=alt.Text("total_deaths:Q", format=",")
+        ),
+        alt.Chart(res_alt)
+        .mark_text(align="center", baseline="top", dy=10, fontSize=10)
+        .encode(
+            x=alt.X("Año:O"),
+            y=alt.Y("Ratio:Q"),
+            text=alt.Text("total_lesionados:Q", format=",")
+        )
+    )
+    .properties(
+        width=600,
+        height=400,
+        title="Razón de Personas Lesionadas por cada Fallecida por Tipo de Evento"
+    )
     .configure_axis(labelFontSize=12, titleFontSize=14)
     .configure_title(fontSize=16)
 )
