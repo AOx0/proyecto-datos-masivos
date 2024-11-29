@@ -1,0 +1,25 @@
+gen:
+    mkdir -p out
+    cp main.py out/main.py
+    sed '/-e/d' requirements.lock > out/requirements.txt
+
+run-local:
+    rye run functions-framework --target my_cloudevent_function
+
+watch:
+    echo main.py | entr -crs 'just gen && just run-local'
+
+create-topic:
+    gcloud pubsub topics create traffic
+
+deploy:
+    gcloud functions deploy traffic_cloud_function \
+        --runtime python312 \
+        --trigger-topic traffic \
+        --entry-point my_cloudevent_function \
+        --timeout 540s \
+        --memory 512MB \
+        --source ./out
+
+pub url:
+    gcloud pubsub topics publish traffic --message '{{url}}'

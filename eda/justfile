@@ -1,0 +1,2 @@
+watch:
+    echo eda.py | entr -rcs 'rye run gen'

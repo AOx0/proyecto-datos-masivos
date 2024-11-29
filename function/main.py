@@ -1,5 +1,6 @@
 # %%
 import base64
+from io import BufferedReader
 import polars as pl
 import urllib.request
 import functions_framework
@@ -104,16 +105,39 @@ def df_to_bigquery(
 
 
 # Create traffic_data dataset if it doesn't exist
-def create_dataset_if_not_exists(client: bigquery.Client, dataset_name: str):
+def create_dataset(client: bigquery.Client, dataset_name: str):
     dataset_id = f"{client.project}.{dataset_name}"
     try:
-        client.get_dataset(dataset_id)
-    except:
-        dataset = bigquery.Dataset(dataset_id)
-        dataset.location = "US"
-        client.create_dataset(dataset, exists_ok=True)
-        print(f"Created dataset {dataset_id}")
+        client.delete_dataset(dataset_id, delete_contents=True, not_found_ok=True)
+        print(f"Deleted existing dataset {dataset_id}")
+    except Exception as e:
+        print(f"Error deleting dataset {dataset_id}: {e}")
 
+    dataset = bigquery.Dataset(dataset_id)
+    dataset.location = "US"
+    client.create_dataset(dataset, exists_ok=True)
+    print(f"Created dataset {dataset_id}")
+
+def get_response(URL: str) -> BufferedReader:
+    # cache_filename = "downloaded_data.csv"
+    # try:
+    #     # Try to open cached file first
+    #     response = open(cache_filename, "rb")
+    #     print("Using cached file")
+    # except FileNotFoundError:
+    #     # If cache doesn't exist, download and save
+    #     print("Downloading fresh copy")
+    #     req = urllib.request.Request(url=URL)
+    #     response = urllib.request.urlopen(req)
+    #     with open(cache_filename, "wb") as f:
+    #         f.write(response.read())
+    #     response = open(cache_filename, "rb")
+
+    print(f"Downloading fresh copy of {URL}")
+    req = urllib.request.Request(url=URL)
+    response = urllib.request.urlopen(req)
+
+    return response.read()
 
 # %%
 @functions_framework.cloud_event
@@ -121,22 +145,7 @@ def my_cloudevent_function(
     cloud_event: CloudEvent,
 ):
     URL = base64.b64decode(cloud_event.data["message"]["data"]).decode()
-    print("Saving " + URL)
-
-    cache_filename = "downloaded_data.csv"
-
-    try:
-        # Try to open cached file first
-        response = open(cache_filename, "rb")
-        print("Using cached file")
-    except FileNotFoundError:
-        # If cache doesn't exist, download and save
-        print("Downloading fresh copy")
-        req = urllib.request.Request(url=URL)
-        response = urllib.request.urlopen(req)
-        with open(cache_filename, "wb") as f:
-            f.write(response.read())
-        response = open(cache_filename, "rb")
+    response = get_response(URL)
 
     DIAS = { "Lunes": 0, "Martes": 1, "Miércoles": 2, "Miercoles": 2, \
                      "Jueves": 3, "Viernes": 4, "Sabado": 5, "Sábado": 5, "Domingo": 6 }  # fmt: skip
@@ -216,7 +225,7 @@ def my_cloudevent_function(
     print("\n")
 
     client = bigquery.Client()
-    create_dataset_if_not_exists(client, "traffic_data")
+    create_dataset(client, "traffic_data")
 
     # Upload tables
     df_to_bigquery(

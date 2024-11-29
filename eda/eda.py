@@ -4,6 +4,8 @@ import altair as alt
 
 from google.cloud import bigquery
 
+alt.data_transformers.enable("vegafusion")
+
 # %%
 # Color palette:
 CA_01 = "#D12030"
@@ -200,7 +202,6 @@ WITH accidents_by_year_tipo AS (
     SELECT
         EXTRACT(YEAR FROM fecha_evento) as anio,
         t.tipo_evento as tipo,
-        COUNT(*) as total_accidents,
         SUM(personas_fallecidas) as total_deaths,
         SUM(personas_lesionadas) as total_lesionados
     FROM `#.events` e
@@ -210,7 +211,6 @@ WITH accidents_by_year_tipo AS (
 SELECT
     anio,
     tipo,
-    total_accidents,
     total_deaths,
     total_lesionados,
     CAST(total_lesionados AS FLOAT64) / NULLIF(total_deaths, 0) as ratio
@@ -219,7 +219,10 @@ ORDER BY anio, tipo
 """)
 
 res_alt = (
-    res.with_columns(pl.col("anio").alias("Año"))
+    res
+    .filter(pl.col("tipo") != "CAIDA DE PASAJERO")
+    .filter(pl.col("tipo") != "CAIDA DE CICLISTA")
+    .with_columns(pl.col("anio").alias("Año"))
     .with_columns(pl.col("tipo").alias("Tipo"))
     .with_columns(pl.col("ratio").alias("Ratio"))
 )
@@ -236,7 +239,6 @@ chart = (
                 "Año",
                 "Tipo",
                 alt.Tooltip("Ratio:Q", format=",.1f"),
-                alt.Tooltip("total_accidents:Q", title="Total Accidentes", format=","),
                 alt.Tooltip("total_deaths:Q", title="Total Fallecidos", format=","),
                 alt.Tooltip("total_lesionados:Q", title="Total Lesionados", format=",")
             ]
@@ -248,13 +250,6 @@ chart = (
             y=alt.Y("Ratio:Q"),
             text=alt.Text("total_deaths:Q", format=",")
         ),
-        alt.Chart(res_alt)
-        .mark_text(align="center", baseline="top", dy=10, fontSize=10)
-        .encode(
-            x=alt.X("Año:O"),
-            y=alt.Y("Ratio:Q"),
-            text=alt.Text("total_lesionados:Q", format=",")
-        )
     )
     .properties(
         width=600,
@@ -262,6 +257,168 @@ chart = (
         title="Razón de Personas Lesionadas por cada Fallecida por Tipo de Evento"
     )
     .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# Probability of dying if you have an accident per each type of accident per year
+res = query("""
+WITH accidents_by_year_tipo AS (
+    SELECT
+        EXTRACT(YEAR FROM fecha_evento) as anio,
+        t.tipo_evento as tipo,
+        COUNT(*) as total_accidents,
+        SUM(personas_fallecidas) as total_deaths
+    FROM `#.events` e
+    JOIN `#.tipo_evento` t ON e.tipo_evento = t.id
+    GROUP BY anio, tipo
+)
+SELECT
+    anio,
+    tipo,
+    total_accidents,
+    total_deaths,
+    CAST(total_deaths AS FLOAT64) / NULLIF(total_accidents, 0) as probability
+FROM accidents_by_year_tipo
+ORDER BY anio, tipo
+""")
+
+res_alt = (
+    res.with_columns(pl.col("anio").alias("Año"))
+    .with_columns(pl.col("tipo").alias("Tipo"))
+    .with_columns(pl.col("probability").alias("Probabilidad"))
+)
+
+chart = (
+    alt.Chart(res_alt)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("Año:O", title="Año"),
+        y=alt.Y("Probabilidad:Q", title="Probabilidad de Muerte", axis=alt.Axis(format=".1%")),
+        color=alt.Color("Tipo:N", scale=alt.Scale(range=COLORS), legend=alt.Legend(title="Tipo de Evento")),
+        tooltip=["Año", "Tipo", alt.Tooltip("Probabilidad:Q", format=".1%"), alt.Tooltip("total_accidents:Q", title="Total Accidentes", format=","), alt.Tooltip("total_deaths:Q", title="Total Fallecidos", format=",")]
+    )
+    .properties(width=600, height=400, title="Probabilidad de Muerte por Tipo de Evento y Año")
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# Probability distribution curve of the number of injured people on accidents per year
+res = query("""
+SELECT
+    EXTRACT(YEAR FROM fecha_evento) as anio,
+    personas_lesionadas
+FROM `#.events`
+WHERE personas_lesionadas > 0
+""")
+
+res_alt = (
+    res.with_columns(pl.col("anio").alias("Año"))
+    .with_columns(pl.col("personas_lesionadas").alias("Lesionados"))
+)
+
+chart = (
+    alt.Chart(res_alt)
+    .transform_density(
+        density="Lesionados",
+        groupby=["Año"],
+        as_=["Lesionados", "Density"]
+    )
+    .mark_line()
+    .encode(
+        x=alt.X("Lesionados:Q", title="Número de Lesionados"),
+        y=alt.Y("Density:Q", title="Densidad"),
+        color=alt.Color("Año:N", scale=alt.Scale(range=COLORS), legend=alt.Legend(title="Año")),
+        tooltip=["Año", alt.Tooltip("Lesionados:Q", format=",.0f"), alt.Tooltip("Density:Q", format=".2%")]
+    )
+    .properties(width=600, height=400, title="Distribución de Probabilidad del Número de Lesionados por Año")
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# plot for percentage of accidents that resulted in deaths by alcaldia
+res = query("""
+WITH total_by_alcaldia AS (
+    SELECT
+        a.alcaldia,
+        COUNT(*) as total
+    FROM `#.events` e
+    JOIN `#.alcaldia` a ON e.alcaldia = a.id
+    GROUP BY a.alcaldia
+),
+deaths_by_alcaldia AS (
+    SELECT
+        a.alcaldia,
+        COUNT(*) as deaths
+    FROM `#.events` e
+    JOIN `#.alcaldia` a ON e.alcaldia = a.id
+    WHERE personas_fallecidas > 0
+    GROUP BY a.alcaldia
+)
+SELECT
+    d.alcaldia,
+    d.deaths,
+    ta.total,
+    d.deaths / ta.total as porcentaje
+FROM deaths_by_alcaldia d
+JOIN total_by_alcaldia ta ON d.alcaldia = ta.alcaldia
+ORDER BY porcentaje DESC
+""")
+
+res_alt = (
+    res.filter(pl.col("alcaldia") != pl.lit("GUSTAVO A. MADERO"))
+    .with_columns(pl.col("alcaldia").alias("Alcaldía"))
+    .with_columns(pl.col("porcentaje").alias("Porcentaje"))
+)
+
+chart = (
+    (
+        alt.Chart(res_alt)
+        .mark_bar()
+        .encode(
+            x=alt.X("Alcaldía:N", title="Alcaldía", sort="-y"),
+            y=alt.Y(
+                "Porcentaje:Q",
+                title="Porcentaje de Fallecimientos",
+                axis=alt.Axis(format=".1%"),
+            ),
+            color=alt.Color("Alcaldía:N", scale=alt.Scale(range=COLORS), legend=None),
+            tooltip=[
+                "Alcaldía",
+                alt.Tooltip("Porcentaje:Q", format=".1%"),
+                alt.Tooltip("deaths:Q", title="Total Fallecimientos", format=","),
+                alt.Tooltip("total:Q", title="Total Accidentes", format=","),
+            ],
+        )
+        + alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-5, fontWeight="bold", fontSize=8)
+        .encode(
+            x=alt.X("Alcaldía:N", title="Alcaldía", sort="-y"),
+            y=alt.Y("Porcentaje:Q", title="Porcentaje de Fallecimientos"),
+            text=alt.Text("total:Q", format=","),
+        )
+        + alt.Chart(res_alt)
+        .mark_text(align="center", baseline="bottom", dy=-20, fontSize=8)
+        .encode(
+            x=alt.X("Alcaldía:N", title="Alcaldía", sort="-y"),
+            y=alt.Y("Porcentaje:Q", title="Porcentaje de Fallecimientos"),
+            text=alt.Text("deaths:Q", format=","),
+        )
+    )
+    .properties(
+        width=600,
+        height=400,
+        title="Porcentaje de Accidentes con Fallecimientos por Alcaldía",
+    )
+    .configure_axis(labelFontSize=12, titleFontSize=14, labelAngle=45)
     .configure_title(fontSize=16)
 )
 
