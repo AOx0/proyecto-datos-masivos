@@ -116,6 +116,7 @@ ptyprocess==0.7.0
     # via pexpect
 pure-eval==0.2.3
     # via stack-data
+pyarrow==18.1.0
 pyasn1==0.6.1
     # via pyasn1-modules
     # via rsa
