@@ -1126,3 +1126,134 @@ chart = (
 )
 
 chart
+
+# %%
+# Average number of incidents happening in the same hour period of the day for each alcaldia
+res = query("""
+WITH incidents_by_hour_alcaldia AS (
+    SELECT
+        EXTRACT(HOUR FROM hora_evento) as hora,
+        a.alcaldia,
+        COUNT(*) as total_incidents
+    FROM `#.events` e
+    JOIN `#.alcaldia` a ON e.alcaldia = a.id
+    GROUP BY hora, a.alcaldia
+)
+SELECT
+    hora,
+    alcaldia,
+    AVG(total_incidents) as avg_incidents
+FROM incidents_by_hour_alcaldia
+GROUP BY hora, alcaldia
+ORDER BY hora, alcaldia
+""")
+
+res_alt = (
+    res.with_columns(pl.col("hora").alias("Hora"))
+    .with_columns(pl.col("alcaldia").alias("Alcaldía"))
+    .with_columns(pl.col("avg_incidents").alias("Promedio de Incidentes"))
+)
+
+chart = ((
+    alt.Chart(res_alt)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("Hora:Q", title="Hora del día"),
+        y=alt.Y("Promedio de Incidentes:Q", title="Promedio de Incidentes", axis=alt.Axis(format="s")),
+        color=alt.Color(
+            "Alcaldía:N",
+            scale=alt.Scale(scheme="category20"),
+            legend=alt.Legend(title="Alcaldía"),
+        ),
+        tooltip=["Hora", "Alcaldía", alt.Tooltip("Promedio de Incidentes:Q", format=",")]
+    )
+    .properties(
+        width=600, height=400, title="Promedio de Incidentes por Hora y Alcaldía"
+    )
+)
+.configure_axis(labelFontSize=12, titleFontSize=14)
+.configure_title(fontSize=16))
+
+chart
+
+# %%
+# Total number of accidents in each alcaldia per each year
+res = query("""
+SELECT
+    EXTRACT(YEAR FROM fecha_evento) as anio,
+    a.alcaldia,
+    COUNT(*) as total_accidentes
+FROM `#.events` e
+JOIN `#.alcaldia` a ON e.alcaldia = a.id
+GROUP BY anio, a.alcaldia
+ORDER BY anio, a.alcaldia
+""")
+
+res_alt = (
+    res.with_columns(pl.col("anio").alias("Año"))
+    .with_columns(pl.col("alcaldia").alias("Alcaldía"))
+    .with_columns(pl.col("total_accidentes").alias("Total Accidentes"))
+)
+
+chart = (
+    alt.Chart(res_alt)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("Año:O", title="Año"),
+        y=alt.Y("Total Accidentes:Q", title="Número de Accidentes", axis=alt.Axis(format="s")),
+        color=alt.Color(
+            "Alcaldía:N",
+            scale=alt.Scale(scheme="category20"),
+            legend=alt.Legend(title="Alcaldía"),
+        ),
+        tooltip=["Año", "Alcaldía", alt.Tooltip("Total Accidentes:Q", format=",")]
+    )
+    .properties(
+        width=600, height=400, title="Número Total de Accidentes por Año y Alcaldía"
+    )
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
+
+# %%
+# Number of deceased people by hour and by tipo
+res = query("""
+SELECT
+    EXTRACT(HOUR FROM hora_evento) as hora,
+    t.tipo_evento as tipo,
+    SUM(personas_fallecidas) as total_fallecidos
+FROM `#.events` e
+JOIN `#.tipo_evento` t ON e.tipo_evento = t.id
+GROUP BY hora, tipo
+ORDER BY hora, tipo
+""")
+
+res_alt = (
+    res.with_columns(pl.col("hora").alias("Hora"))
+    .with_columns(pl.col("tipo").alias("Tipo"))
+    .with_columns(pl.col("total_fallecidos").alias("Total"))
+)
+
+chart = (
+    alt.Chart(res_alt)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("Hora:Q", title="Hora del día"),
+        y=alt.Y("Total:Q", title="Número de Fallecidos", axis=alt.Axis(format="s")),
+        color=alt.Color(
+            "Tipo:N",
+            scale=alt.Scale(range=COLORS),
+            legend=alt.Legend(title="Tipo de Evento"),
+        ),
+        tooltip=["Hora", "Tipo", alt.Tooltip("Total:Q", format=",")],
+    )
+    .properties(
+        width=600, height=400, title="Distribución de Fallecidos por Hora y Tipo"
+    )
+    .configure_axis(labelFontSize=12, titleFontSize=14)
+    .configure_title(fontSize=16)
+)
+
+chart
