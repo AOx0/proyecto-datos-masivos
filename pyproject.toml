@@ -9,11 +9,16 @@ dependencies = [
     "functions-framework>=3.8.2",
     "polars>=1.14.0",
     "cloudevents>=1.11.0",
-    "ipykernel>=6.29.5",
     "google>=3.0.0",
     "google-cloud-bigquery>=3.27.0",
     "pyarrow>=18.1.0",
     "pandas>=2.2.3",
+    "google-cloud-bigquery-storage>=2.27.0",
+    "altair>=5.5.0",
+    "nbformat>=5.10.4",
+    "ipykernel>=6.29.5",
+    "seaborn>=0.13.2",
+    "jupytext>=1.16.4",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -22,3 +27,6 @@ requires-python = ">= 3.8"
 managed = true
 virtual = true
 dev-dependencies = []
+
+[tool.rye.scripts]
+gen = "jupytext --to ipynb --from py:percent eda.py"
